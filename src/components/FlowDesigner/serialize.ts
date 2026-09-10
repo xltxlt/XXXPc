@@ -29,7 +29,7 @@ export function toWorkflowDefinition(
       Id: node.id,
       Type: node.type ?? '',
       Name: node.data?.label ?? node.id,
-      Config:JSON.stringify(config) ,
+      Config: config,
       NodeJson: JSON.stringify(node),
     }
   })
@@ -75,41 +75,32 @@ export function fromWorkflowDefinition(def: any): {
   const rawEdges: any[] = def?.Edges ?? def?.edges ?? []
 
   const nodes: Node[] = rawNodes.map((n, i) => {
-    return n.nodeJson? JSON.parse(n.nodeJson) : {};
-    // const id: string = n.Id ?? n.id
-    // const type: string = n.Type ?? n.type
-    // const name: string = n.Name ?? n.name
-    // const config = parseConfig(n.Config ?? n.config)
-    // const position = n.Position ?? n.position ?? { x: (i % 4) * 220, y: Math.floor(i / 4) * 140 }
-
-    // return {
-    //   id,
-    //   type,
-    //   position,
-    //   data: {
-    //     ...defaultNodeData(type as any),
-    //     ...config,
-    //     label: name || type,
-    //   },
-    //   ...(config?.parentNode ? { parentNode: config.parentNode, expandParent: true } : {}),
-    // }
+    const rawNode = n.NodeJson ?? n.nodeJson
+    if (rawNode) {
+      try { return typeof rawNode === 'string' ? JSON.parse(rawNode) : rawNode } catch { /* fall back to DTO fields */ }
+    }
+    const id: string = n.Id ?? n.id ?? `node_${i}`
+    const type: string = n.Type ?? n.type ?? 'task'
+    const name: string = n.Name ?? n.name ?? type
+    const config = parseConfig(n.Config ?? n.config)
+    return {
+      id,
+      type,
+      position: n.Position ?? n.position ?? { x: (i % 4) * 220, y: Math.floor(i / 4) * 140 },
+      data: { ...defaultNodeData(type as any), ...config, label: name || type },
+      ...(config.parentNode ? { parentNode: config.parentNode, expandParent: true } : {}),
+    }
   })
 
   const edges: Edge[] = rawEdges.map((e, i) => {
-    return e.edgeJson? JSON.parse(e.edgeJson) : {};
-    // const source = e.Source ?? e.source
-    // const target = e.Target ?? e.target
-    // const condition = e.Condition ?? e.condition ?? undefined
-    // return {
-    //   id: e.Id ?? e.id ?? `e_${source}_${target}_${i}`,
-    //   source,
-    //   target,
-    //   type: 'smoothstep',
-    //   animated: true,
-    //   style: { stroke: '#409eff', strokeWidth: 2 },
-    //   label: condition || undefined,
-    //   data: condition ? { condition } : {},
-    // }
+    const rawEdge = e.EdgeJson ?? e.edgeJson
+    if (rawEdge) {
+      try { return typeof rawEdge === 'string' ? JSON.parse(rawEdge) : rawEdge } catch { /* fall back to DTO fields */ }
+    }
+    const source = e.Source ?? e.source
+    const target = e.Target ?? e.target
+    const condition = e.Condition ?? e.condition ?? undefined
+    return { id: e.Id ?? e.id ?? `e_${source}_${target}_${i}`, source, target, type: 'smoothstep', animated: true, style: { stroke: '#409eff', strokeWidth: 2 }, label: condition, data: condition ? { condition } : {} }
   })
 
   return { nodes, edges }
