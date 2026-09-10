@@ -15,17 +15,18 @@
     <main class="designer-body">
       <aside class="designer-panel component-panel">
         <h3>组件库</h3>
-        <p class="panel-tip">选择分组后，新增字段会放入该分组。</p>
+        <p class="panel-tip">可拖拽控件到画布；选中分组后点击控件会添加到该分组。</p>
         <el-divider content-position="left">基础字段</el-divider>
-        <el-button v-for="item in fieldPalette" :key="item.formType" class="palette-button" @click="addField(item)">
+        <el-button v-for="item in fieldPalette" :key="item.formType" class="palette-button" draggable="true"
+          @dragstart="startPaletteDrag($event, item)" @click="addField(item)">
           {{ item.label }}
         </el-button>
         <el-divider content-position="left">布局</el-divider>
-        <el-button class="palette-button" @click="addGroup">分组</el-button>
-        <el-button class="palette-button" @click="addTable">表格分组</el-button>
+        <el-button class="palette-button" draggable="true" @dragstart="startPaletteDrag($event, groupPaletteItem)" @click="addGroup">分组</el-button>
+        <el-button class="palette-button" draggable="true" @dragstart="startPaletteDrag($event, tablePaletteItem)" @click="addTable">表格分组</el-button>
       </aside>
 
-      <section class="canvas-panel" @click.self="selectedId = ''">
+      <section class="canvas-panel" @click.self="selectedId = ''" @dragover.prevent @drop="dropOnRoot">
         <div class="canvas-title">
           <strong>表单画布</strong>
           <el-radio-group v-model="form.cols" size="small">
@@ -37,19 +38,20 @@
         <div v-if="form.form.length === 0" class="empty-canvas">请从左侧添加字段或布局组件。</div>
         <div v-else class="canvas-items">
           <template v-for="item in form.form" :key="item.ident">
-            <div v-if="isContainer(item)" class="canvas-group" :class="{ selected: selectedId === item.ident }" @click.stop="select(item)">
+            <div v-if="isContainer(item)" class="canvas-group" :class="{ selected: selectedId === item.ident }" @click.stop="select(item)"
+              @dragover.prevent @drop.stop="dropInContainer($event, item)">
               <div class="canvas-group-title">
                 <span>{{ item.label || '未命名分组' }}</span>
                 <small>{{ item.formType === PageFormGroup.Table ? '表格分组' : '分组' }}</small>
               </div>
               <div class="canvas-group-fields">
                 <template v-for="child in containerFields(item)" :key="child.ident">
-                  <FieldCard :item="child" :selected="selectedId === child.ident" @select="select" />
+                  <FieldCard :item="child" :selected="selectedId === child.ident" @select="select" @drag-start="startItemDrag" />
                 </template>
                 <span v-if="containerFields(item).length === 0" class="empty-group">请选择此分组后添加字段</span>
               </div>
             </div>
-            <FieldCard v-else :item="item" :selected="selectedId === item.ident" @select="select" />
+            <FieldCard v-else :item="item" :selected="selectedId === item.ident" @select="select" @drag-start="startItemDrag" />
           </template>
         </div>
       </section>
@@ -105,12 +107,14 @@ const fieldPalette: PaletteItem[] = [
   { label: '下拉选择', formType: PageFormType.OneSelectSearch, choice: true }, { label: '单选', formType: PageFormType.Radio, choice: true },
   { label: '多选', formType: PageFormType.MultSelect, choice: true },
 ]
+const groupPaletteItem: PaletteItem = { label: '基础信息', formType: PageFormGroup.Group }
+const tablePaletteItem: PaletteItem = { label: '明细信息', formType: PageFormGroup.Table }
 
 const FieldCard = defineComponent({
   props: { item: { type: Object as PropType<DesignerItem>, required: true }, selected: Boolean },
-  emits: ['select'],
+  emits: ['select', 'drag-start'],
   setup(props, { emit }) {
-    return () => h('div', { class: ['field-card', { selected: props.selected }], onClick: (event: Event) => { event.stopPropagation(); emit('select', props.item) } }, [
+    return () => h('div', { class: ['field-card', { selected: props.selected }], draggable: true, onDragstart: (event: DragEvent) => emit('drag-start', event, props.item), onClick: (event: Event) => { event.stopPropagation(); emit('select', props.item) } }, [
       h('strong', props.item.label || '未命名字段'), h('span', props.item.fieldName || '请配置字段名'),
     ])
   },
@@ -121,6 +125,8 @@ const selectedId = ref('')
 const previewVisible = ref(false)
 const jsonVisible = ref(false)
 const jsonText = ref('')
+const draggingPalette = ref<PaletteItem>()
+const draggingItemId = ref('')
 let id = 0
 const nextId = () => `page-form-${Date.now()}-${++id}`
 const isContainer = (item: DesignerItem) => [PageFormGroup.Group, PageFormGroup.Table, PageFormGroup.List].includes(item.formType)
@@ -148,6 +154,50 @@ const addTable = () => {
   const item: DesignerItem = { ident: nextId(), formType: PageFormGroup.Table, label: '明细信息', fieldName: `details${id}`, child: [{ ident: nextId(), formType: PageFormGroup.Group, label: '', fieldName: '', child: [] }] }
   form.form.push(item as never); select(item)
 }
+const startPaletteDrag = (event: DragEvent, item: PaletteItem) => {
+  draggingItemId.value = ''
+  draggingPalette.value = item
+  event.dataTransfer?.setData('text/plain', item.label)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy'
+}
+const startItemDrag = (event: DragEvent, item: DesignerItem) => {
+  draggingPalette.value = undefined
+  draggingItemId.value = item.ident
+  event.dataTransfer?.setData('text/plain', item.ident)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+const detachItem = (items: DesignerItem[], ident: string): DesignerItem | undefined => {
+  const index = items.findIndex((item) => item.ident === ident)
+  if (index >= 0) return items.splice(index, 1)[0]
+  for (const item of items) { const detached = detachItem((item.child ?? []) as DesignerItem[], ident); if (detached) return detached }
+}
+const containsItem = (item: DesignerItem, ident: string): boolean => item.ident === ident || (item.child?.some((child) => containsItem(child, ident)) ?? false)
+const takeDraggedItem = (): DesignerItem | undefined => {
+  if (draggingPalette.value) {
+    const palette = draggingPalette.value
+    draggingPalette.value = undefined
+    if (palette.formType === PageFormGroup.Group) return { ident: nextId(), formType: PageFormGroup.Group, label: palette.label, fieldName: '', child: [] }
+    if (palette.formType === PageFormGroup.Table) return { ident: nextId(), formType: PageFormGroup.Table, label: palette.label, fieldName: `details${id}`, child: [{ ident: nextId(), formType: PageFormGroup.Group, label: '', fieldName: '', child: [] }] }
+    return createField(palette)
+  }
+  const ident = draggingItemId.value
+  draggingItemId.value = ''
+  return ident ? detachItem(form.form as DesignerItem[], ident) : undefined
+}
+const dropOnRoot = () => {
+  const item = takeDraggedItem()
+  if (item) { form.form.push(item as never); select(item) }
+}
+const dropInContainer = (_event: DragEvent, target: DesignerItem) => {
+  if (draggingItemId.value === target.ident) return
+  if (draggingPalette.value && [PageFormGroup.Group, PageFormGroup.Table, PageFormGroup.List].includes(draggingPalette.value.formType)) return
+  const dragged = draggingItemId.value ? walk(form.form as DesignerItem[], draggingItemId.value) : undefined
+  if (dragged && (isContainer(dragged) || containsItem(dragged, target.ident))) return
+  const item = takeDraggedItem()
+  if (!item) return
+  containerFields(target).push(item)
+  select(item)
+}
 const syncOptions = (item: DesignerItem) => { item.optionText = item.optionText ?? '' }
 const parentAndIndex = (items: DesignerItem[], target: string): { items: DesignerItem[]; index: number } | undefined => {
   const index = items.findIndex((item) => item.ident === target)
@@ -172,12 +222,13 @@ const resetDesigner = () => { form.form.splice(0); selectedId.value = '' }
 </script>
 
 <style scoped lang="less">
-.page-form-designer { min-height: 720px; background: #f5f7fa; }
-.designer-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 24px; background: #fff; border-bottom: 1px solid #ebeef5; h2 { margin: 0 0 6px; font-size: 20px; } p { margin: 0; color: #909399; font-size: 13px; } }
+.page-form-designer { min-height: 720px; overflow: hidden; background: #f3f6fc; }
+.designer-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 28px; color: #fff; background: linear-gradient(120deg, #1c64f2, #4f46e5); box-shadow: 0 3px 16px rgb(30 64 175 / 20%); h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: .5px; } p { margin: 0; color: rgb(255 255 255 / 80%); font-size: 13px; } code { padding: 1px 4px; border-radius: 3px; background: rgb(255 255 255 / 16%); }.designer-actions :deep(.el-button) { border-color: rgb(255 255 255 / 45%); }.designer-actions :deep(.el-button:not(.el-button--danger)) { color: #1d4ed8; } }
 .designer-actions, .property-actions { display: flex; gap: 8px; }
-.designer-body { display: grid; grid-template-columns: 200px minmax(420px, 1fr) 280px; min-height: 650px; }
-.designer-panel { padding: 18px; background: #fff; border-right: 1px solid #ebeef5; h3 { margin: 0 0 14px; font-size: 16px; } }
-.property-panel { border-right: 0; border-left: 1px solid #ebeef5; }.panel-tip { margin: 0; color: #909399; font-size: 12px; line-height: 1.5; }
-.palette-button { width: 100%; margin: 0 0 8px !important; text-align: left; }.canvas-panel { padding: 20px; overflow: auto; }.canvas-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }.empty-canvas, .empty-group { display: block; padding: 42px 16px; color: #909399; text-align: center; border: 1px dashed #cdd0d6; background: #fff; }.canvas-items { display: grid; gap: 12px; }.canvas-group { padding: 16px; border: 1px solid #dcdfe6; background: #fff; cursor: pointer; }.canvas-group.selected, .field-card.selected { border-color: #409eff; box-shadow: 0 0 0 2px rgb(64 158 255 / 15%); }.canvas-group-title { display: flex; justify-content: space-between; padding-bottom: 10px; font-weight: 600; small { color: #909399; font-weight: normal; } }.canvas-group-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }.field-card { padding: 12px; border: 1px solid #ebeef5; background: #fff; cursor: pointer; strong, span { display: block; } span { margin-top: 5px; color: #909399; font-size: 12px; }.property-actions { padding-top: 10px; flex-wrap: wrap; }
-@media (max-width: 1050px) { .designer-body { grid-template-columns: 180px minmax(360px, 1fr); }.property-panel { grid-column: 1 / -1; border-top: 1px solid #ebeef5; border-left: 0; }.designer-header { align-items: flex-start; gap: 12px; flex-direction: column; } }
+.designer-body { display: grid; grid-template-columns: 220px minmax(460px, 1fr) 300px; min-height: 650px; }
+.designer-panel { padding: 20px; background: #fff; border-right: 1px solid #e5eaf3; h3 { margin: 0 0 8px; color: #172554; font-size: 16px; } }
+.property-panel { border-right: 0; border-left: 1px solid #e5eaf3; }.panel-tip { margin: 0; color: #7b879b; font-size: 12px; line-height: 1.6; }
+.palette-button { width: 100%; margin: 0 0 9px !important; color: #3b4b68; text-align: left; border-color: #dbe5f4; transition: transform .15s, box-shadow .15s; cursor: grab; &:hover { color: #1d4ed8; border-color: #93c5fd; background: #eff6ff; box-shadow: 0 4px 10px rgb(59 130 246 / 12%); transform: translateX(3px); } &:active { cursor: grabbing; } }
+.canvas-panel { padding: 24px; overflow: auto; background-image: radial-gradient(#d9e3f2 1px, transparent 1px); background-size: 18px 18px; }.canvas-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 12px 16px; color: #1e3a5f; background: rgb(255 255 255 / 90%); border: 1px solid #e3ebf7; border-radius: 10px; box-shadow: 0 2px 8px rgb(55 85 130 / 7%); }.empty-canvas, .empty-group { display: block; padding: 42px 16px; color: #7b879b; text-align: center; border: 2px dashed #b9c9df; border-radius: 10px; background: rgb(255 255 255 / 75%); }.canvas-items { display: grid; gap: 14px; }.canvas-group { padding: 18px; border: 1px solid #dce6f2; border-radius: 10px; background: #fff; box-shadow: 0 3px 12px rgb(56 88 130 / 8%); cursor: pointer; transition: border-color .15s, box-shadow .15s; }.canvas-group.selected, .field-card.selected { border-color: #3b82f6; box-shadow: 0 0 0 3px rgb(59 130 246 / 15%); }.canvas-group-title { display: flex; justify-content: space-between; padding-bottom: 12px; color: #1e3a5f; font-weight: 600; border-bottom: 1px solid #edf2f8; small { color: #7b879b; font-weight: normal; } }.canvas-group-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 12px; }.field-card { padding: 13px; border: 1px solid #e1eaf5; border-radius: 8px; background: #fff; cursor: grab; transition: border-color .15s, box-shadow .15s, transform .15s; &:hover { border-color: #93c5fd; box-shadow: 0 4px 10px rgb(59 130 246 / 10%); transform: translateY(-1px); } &:active { cursor: grabbing; } strong, span { display: block; } strong { color: #334155; } span { margin-top: 5px; color: #7b879b; font-size: 12px; }.property-actions { padding-top: 10px; flex-wrap: wrap; }
+@media (max-width: 1050px) { .designer-body { grid-template-columns: 190px minmax(360px, 1fr); }.property-panel { grid-column: 1 / -1; border-top: 1px solid #e5eaf3; border-left: 0; }.designer-header { align-items: flex-start; gap: 12px; flex-direction: column; } }
 </style>
