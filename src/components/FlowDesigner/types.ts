@@ -139,12 +139,14 @@ export interface WorkflowNodeDto {
   Type: string
   Name: string
   Config: Record<string, any>
+  NodeJson?: string
 }
 
 export interface WorkflowEdgeDto {
   Source: string
   Target: string
   Condition?: string
+  EdgeJson?: string
 }
 
 export interface WorkflowDefinitionDto {

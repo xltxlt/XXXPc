@@ -16,6 +16,12 @@
           </el-button>
           <el-button @click="fitView" :icon="Aim" title="适应视图">
           </el-button>
+          <el-button :icon="RefreshLeft" :disabled="historyIndex <= 0" @click="undo" title="撤销">
+          </el-button>
+          <el-button :icon="RefreshRight" :disabled="historyIndex >= history.length - 1" @click="redo" title="重做">
+          </el-button>
+          <el-button :icon="Grid" @click="autoLayout" title="自动排版">
+          </el-button>
           <el-button type="danger" :icon="Delete" @click="handleDeleteSelected" title="删除选中">
           </el-button>
         </slot>
@@ -35,7 +41,7 @@
     <div class="flow-body">
       <!-- 左侧节点面板 -->
       <div class="flow-panel-left" v-if="showNodePanel">
-        <div class="panel-title">节点面板</div>
+        <div class="panel-title"><span>节点面板</span><small>拖入画布</small></div>
         <div v-for="item in nodePanelItems" :key="item.type" class="panel-node-item" draggable="true"
           @dragstart="onDragStart($event, item)">
           <span class="node-icon" :style="{ background: item.color }">{{
@@ -47,6 +53,13 @@
 
       <!-- 中间画布 -->
       <div class="flow-canvas-wrap" @drop="onDrop" @dragover.prevent>
+        <div class="canvas-status">
+          <span><b>{{ nodes.length }}</b> 个节点</span>
+          <i></i>
+          <span><b>{{ edges.length }}</b> 条连线</span>
+          <i></i>
+          <span>拖拽节点，拖动连接点建立流转</span>
+        </div>
         <VueFlow :id="FLOW_ID" v-model:nodes="nodes" v-model:edges="edges" :node-types="nodeTypes"
           :default-edge-options="defaultEdgeOptions"
           :connection-line-options="{ style: { stroke: '#409eff', strokeWidth: 2 } }" :snap-grid="[16, 16]"
@@ -196,7 +209,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, markRaw, nextTick } from 'vue'
+import { ref, computed, watch, markRaw, nextTick, onMounted } from 'vue'
 import {
   VueFlow,
   useVueFlow,
@@ -237,7 +250,7 @@ import {
   Delete,
   Minus,
   Aim,
-  Refresh, Coin
+  Refresh, Coin, RefreshLeft, RefreshRight, Grid
 } from '@element-plus/icons-vue'
 import useDragAndDrop from './hooks/useDnD'
 import type { VfWorkflowDefinition } from '@/api-services/generated/index.ts'
@@ -290,6 +303,35 @@ const selectedEdge = computed<Edge | null>(
   () => edges.value.find((e) => e.id === selectedEdgeId.value) ?? null
 )
 
+type HistorySnapshot = { nodes: Node[]; edges: Edge[] }
+const history = ref<HistorySnapshot[]>([])
+const historyIndex = ref(-1)
+let applyingHistory = false
+const cloneGraph = (): HistorySnapshot => JSON.parse(JSON.stringify({ nodes: nodes.value, edges: edges.value }))
+const recordHistory = () => {
+  if (applyingHistory) return
+  const snapshot = cloneGraph()
+  const current = history.value[historyIndex.value]
+  if (current && JSON.stringify(current) === JSON.stringify(snapshot)) return
+  history.value.splice(historyIndex.value + 1)
+  history.value.push(snapshot)
+  historyIndex.value = history.value.length - 1
+}
+const restoreHistory = (index: number) => {
+  const snapshot = history.value[index]
+  if (!snapshot) return
+  applyingHistory = true
+  nodes.value = JSON.parse(JSON.stringify(snapshot.nodes))
+  edges.value = JSON.parse(JSON.stringify(snapshot.edges))
+  historyIndex.value = index
+  selectedNodeId.value = null
+  selectedEdgeId.value = null
+  nextTick(() => { applyingHistory = false; emitChange() })
+}
+const undo = () => restoreHistory(historyIndex.value - 1)
+const redo = () => restoreHistory(historyIndex.value + 1)
+onMounted(() => recordHistory())
+
 // 避免外部赋值触发的回显再次 emit
 let silent = false
 
@@ -303,14 +345,14 @@ watch(
     if (Array.isArray(val.edges)) {
       edges.value = val.edges.map((e) => ({ ...e, data: e.data ?? {} }))
     }
-    nextTick(() => (silent = false))
+    nextTick(() => { silent = false; history.value = []; historyIndex.value = -1; recordHistory() })
   },
   { immediate: true }
 )
 
 // 任何变化 → 通知父组件
 watch([nodes, edges], () => {
-  if (!silent) emitChange()
+  if (!silent) { recordHistory(); emitChange() }
 }, { deep: true, flush: 'post' })
 
 function designerForm() {
@@ -328,6 +370,14 @@ function onEdgesChange(_changes: EdgeChange[]) {
 
 // 连接节点
 function onConnect(conn: Connection) {
+  if (!conn.source || !conn.target || conn.source === conn.target) {
+    ElMessage.warning('请选择两个不同的节点进行连接')
+    return
+  }
+  if (edges.value.some((edge) => edge.source === conn.source && edge.target === conn.target && edge.sourceHandle === (conn.sourceHandle ?? undefined))) {
+    ElMessage.warning('相同的连线已存在')
+    return
+  }
   const edge: Edge = {
     id: `e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
     source: conn.source!,
@@ -420,11 +470,35 @@ function handleReset() {
   emit('reset')
   emitChange()
 }
+function autoLayout() {
+  if (!nodes.value.length) return
+  const levels = new Map<string, number>()
+  const startIds = nodes.value.filter((node) => node.type === 'start').map((node) => node.id)
+  ;(startIds.length ? startIds : [nodes.value[0].id]).forEach((id) => levels.set(id, 0))
+  for (let pass = 0; pass < nodes.value.length; pass += 1) {
+    edges.value.forEach((edge) => {
+      const sourceLevel = levels.get(edge.source)
+      if (sourceLevel !== undefined) levels.set(edge.target, Math.max(levels.get(edge.target) ?? 0, sourceLevel + 1))
+    })
+  }
+  const columns = new Map<number, Node[]>()
+  nodes.value.forEach((node, index) => {
+    const level = levels.get(node.id) ?? index
+    columns.set(level, [...(columns.get(level) ?? []), node])
+  })
+  columns.forEach((column, level) => column.forEach((node, index) => {
+    node.position = { x: 90 + level * 260, y: 100 + index * 160 }
+  }))
+  emitChange()
+  nextTick(() => fitView({ padding: 0.22, duration: 300 }))
+}
 function loadDefinition(data: any) {
   const { nodes: ns, edges: es } = fromWorkflowDefinition(data)
   nodes.value = ns;
   edges.value = es;
-  console.log('loadDefinition', data, ns, es)
+  history.value = []
+  historyIndex.value = -1
+  recordHistory()
   emitChange();
 }
 // 导出 JSON（后端结构）
