@@ -1,4 +1,4 @@
-<template>
+<!-- <template>
     <div style="height: 100%;width: 100%;">
         <YzCustomForm @change-title="changeTitle" @del-component="delButton" :form="matterData.form"
             :attr-data="matterData.attrData" :component-group-list="componentGroupList" ref="yzCustomFormRef"
@@ -767,4 +767,4 @@ onMounted(async () => {
 
 
 }
-</style>
+</style> -->
